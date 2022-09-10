@@ -2,9 +2,14 @@ import taichi as ti
 import math
 import numpy as np
 import os
+from PIL import Image
 
 ti.init(arch=ti.gpu)
 vec = ti.math.vec2
+
+source = Image.open('source.png')
+main_tex = ti.Texture(ti.u8, 4, arr_shape=source.size)
+main_tex.from_image(source)
 
 SAVE_FRAMES = False
 
@@ -54,18 +59,24 @@ for i in range(4, 9):
 
 
 @ti.kernel
-def init(img: ti.types.ndarray()):
+def init(img: ti.types.texture(num_dimensions=2)):
     sample_res = 128
     for x in range(sample_res):
         for y in range(sample_res // 2, sample_res):
             # Spread grains in a restricted area.
             p, q = x * 8 + 4, y * 8 + 4
+            uv = vec(p / 1024, q / 1024)
             i = ti.atomic_add(num_grains[None], 1)
-            gf[i].p = vec(p / 1024, q / 1024)
+            gf[i].p = uv
             gf[i].r = ti.random() * (grain_r_max - grain_r_min) + grain_r_min
             gf[i].m = density * math.pi * gf[i].r**2
-            gf[i].c = img[p, q, 0] * 65536 + img[p, q, 1] * 256 + img[p, q, 2]
-    print(num_grains[None])
+            sample = img.sample_lod(1.0 - uv, 0.0)
+            r = ti.cast(sample.r * 255.0, ti.u32)
+            g = ti.cast(sample.g * 255.0, ti.u32)
+            b = ti.cast(sample.b * 255.0, ti.u32)
+            gf[i].c = b * 65536 + g * 256 + r
+            #gf[i].c = 256 * ti.cast(255.0 * uv.y, ti.u32) + ti.cast(255.0 * uv.x, ti.u32)
+    #print(num_grains[None])
 
 
 @ti.kernel
@@ -211,8 +222,7 @@ def contact(gf: ti.template()):
                         resolve(i, j)
 
 
-source = ti.tools.imread('source.png')
-init(source)
+init(main_tex)
 gui = ti.GUI('Taichi DEM', (window_size, window_size),
              background_color=0x000022)
 step = 0
